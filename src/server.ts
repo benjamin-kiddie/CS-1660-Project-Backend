@@ -1,6 +1,16 @@
-import app from "./app";
+import app, { startServer } from "./app";
 import config from "./config/config";
 
-app.listen(config.port, () => {
-  console.log(`Server running on port ${config.port}`);
-});
+startServer()
+  .then(() => {
+    app.listen(config.port, () => {
+      console.log(`Server running on port ${config.port}`);
+    });
+  })
+  .catch((error) => {
+    console.error(
+      "Failed to start server due to Firebase initialization error:",
+      error,
+    );
+    process.exit(1);
+  });

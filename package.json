@@ -10,7 +10,9 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@types/cors": "^2.8.17",
     "@types/express": "^5.0.1",
+    "@types/multer": "^1.4.12",
     "@types/node": "^22.14.0",
     "dotenv": "^16.4.7",
     "eslint": "^9.23.0",
@@ -21,5 +23,12 @@
     "prettier": "^3.5.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "@google-cloud/secret-manager": "^6.0.1",
+    "cors": "^2.8.5",
+    "firebase-admin": "^13.2.0",
+    "helmet": "^8.1.0",
+    "multer": "^1.4.5-lts.2"
   }
 }
