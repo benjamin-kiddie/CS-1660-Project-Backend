@@ -8,6 +8,7 @@ import { auth } from "firebase-admin";
 
 // Type representing video options that can be shown to user.
 type VideoOption = {
+  id: string;
   title: string;
   uploaderDisplayName: string;
   uploaderPfp: string;
@@ -110,6 +111,9 @@ export async function uploadVideo(req: Request, res: Response) {
   } finally {
     if (videoFile) fs.unlinkSync(videoFile.path);
     if (thumbnailFile) fs.unlinkSync(thumbnailFile.path);
+    if (generatedThumbnailPath && fs.existsSync(generatedThumbnailPath)) {
+      fs.unlinkSync(generatedThumbnailPath);
+    }
   }
 }
 
@@ -122,35 +126,37 @@ export async function getVideoOptions(_req: Request, res: Response) {
   try {
     const videoCollection = db().collection("video");
     const snapshot = await videoCollection.get();
-    const videoOptions: VideoOption[] = [];
-    snapshot.forEach(async (doc) => {
-      const data = doc.data();
-      const videoId = doc.id;
 
-      // get thumbnail signed link
-      const [thumbnailSignedLink] = await storage()
-        .bucket()
-        .file(`thumbnails/${videoId}`)
-        .getSignedUrl({
-          action: "read",
-          expires: Date.now() + 60 * 60 * 1000, // valid for 1 hour
-        });
+    const videoOptions: VideoOption[] = await Promise.all(
+      snapshot.docs.map(async (doc) => {
+        const data = doc.data();
+        const videoId = doc.id;
 
-      // get uploader display name and pfp
-      const userRecord = await auth().getUser(data.uploader);
-      const uploaderDisplayName = userRecord.displayName;
-      const uploaderPfp = userRecord.photoURL;
+        // get thumbnail signed link
+        const [thumbnailSignedLink] = await storage()
+          .bucket()
+          .file(`thumbnails/${videoId}`)
+          .getSignedUrl({
+            action: "read",
+            expires: Date.now() + 60 * 60 * 1000, // valid for 1 hour
+          });
 
-      // add to video options
-      videoOptions.push({
-        title: data.title,
-        uploaderDisplayName: uploaderDisplayName || "",
-        uploaderPfp: uploaderPfp || "",
-        uploadDate: data.uploadDate,
-        views: data.views,
-        thumbnailSignedLink,
-      });
-    });
+        // get uploader display name and pfp
+        const userRecord = await auth().getUser(data.uploader);
+        const uploaderDisplayName = userRecord.displayName;
+        const uploaderPfp = userRecord.photoURL;
+
+        return {
+          id: videoId,
+          title: data.title,
+          uploaderDisplayName: uploaderDisplayName || "",
+          uploaderPfp: uploaderPfp || "",
+          uploadDate: data.uploadDate,
+          views: data.views,
+          thumbnailSignedLink,
+        };
+      }),
+    );
 
     res.status(200).json({
       videoOptions: videoOptions,
@@ -158,8 +164,7 @@ export async function getVideoOptions(_req: Request, res: Response) {
   } catch (error) {
     console.error("Error fetching video options:", error);
     res.status(500).json({
-      error: "Failed to fetch video options",
-      message: error instanceof Error ? error.message : "Unknown error",
+      error: error instanceof Error ? error.message : "Unknown error",
     });
   }
 }
