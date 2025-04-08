@@ -123,6 +123,8 @@ export async function uploadVideo(req: Request, res: Response) {
  * @param {Response} res Response object.
  */
 export async function getVideoOptions(_req: Request, res: Response) {
+  // TODO: Implement semi-random ordering for variety
+  // TODO: Implement pagination for large number of videos
   try {
     const videoCollection = db().collection("video");
     const snapshot = await videoCollection.get();
