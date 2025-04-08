@@ -2,7 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import * as os from "os";
 import { authenticateUser } from "../middleware/authMiddleware";
-import { uploadVideo } from "../controllers/videoController";
+import { getVideoOptions, uploadVideo } from "../controllers/videoController";
 
 const videoRouter = Router();
 
@@ -17,5 +17,7 @@ videoRouter.post(
   ]),
   uploadVideo,
 );
+
+videoRouter.get("/", authenticateUser, getVideoOptions);
 
 export default videoRouter;
