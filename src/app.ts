@@ -3,7 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { errorHandler } from "./middleware/errorHandler";
 import { initializeFirebase } from "./config/firebase";
-import router from "./controllers/videoController";
+import videoRouter from "./routes/videoRoutes";
 
 const app = express();
 
@@ -20,7 +20,7 @@ export async function startServer() {
   try {
     await initializeFirebase();
     app.use(errorHandler);
-    app.use("/video", router);
+    app.use("/video", videoRouter);
   } catch (error) {
     console.error("Failed to start server:", error);
     process.exit(1);
