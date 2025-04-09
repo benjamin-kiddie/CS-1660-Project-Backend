@@ -3,7 +3,7 @@ import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { Request, Response } from "express";
-import { db, storage } from "../config/firebase";
+import admin, { db, storage } from "../config/firebase";
 import { auth } from "firebase-admin";
 
 // Type representing video options that can be shown to user.
@@ -17,6 +17,7 @@ type VideoOption = {
   thumbnailSignedLink: string;
 };
 
+// Type representing details about a video the viewer has requested to watch.
 type VideoDetails = {
   id: string;
   title: string;
@@ -250,6 +251,35 @@ export async function getVideoDetails(req: Request, res: Response) {
     res.status(200).json(videoDetails);
   } catch (error) {
     console.error("Error fetching video details:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
+ * Increment the view count of a given video.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ */
+export async function incrementViewCount(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const { videoId } = req.params;
+  if (!videoId) {
+    res.status(400).json({ error: "Missing video ID" });
+    return;
+  }
+
+  try {
+    const videoRef = db().collection("video").doc(videoId);
+    await videoRef.update({
+      views: admin.firestore.FieldValue.increment(1),
+    });
+    res.status(200).json({ message: "View count incremented" });
+  } catch (error) {
+    console.error("Error incrementing view count:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Unknown error",
     });

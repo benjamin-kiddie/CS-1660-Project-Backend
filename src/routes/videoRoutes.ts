@@ -5,6 +5,7 @@ import { authenticateUser } from "../middleware/authMiddleware";
 import {
   getVideoDetails,
   getVideoOptions,
+  incrementViewCount,
   uploadVideo,
 } from "../controllers/videoController";
 
@@ -23,5 +24,6 @@ videoRouter.post(
 );
 videoRouter.get("/", authenticateUser, getVideoOptions);
 videoRouter.get("/:videoId", authenticateUser, getVideoDetails);
+videoRouter.post("/:videoId/view", authenticateUser, incrementViewCount);
 
 export default videoRouter;
