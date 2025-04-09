@@ -3,7 +3,7 @@ import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { Request, Response } from "express";
-import { db, storage } from "../config/firebase";
+import admin, { db, storage } from "../config/firebase";
 import { auth } from "firebase-admin";
 
 // Type representing video options that can be shown to user.
@@ -17,7 +17,33 @@ type VideoOption = {
   thumbnailSignedLink: string;
 };
 
+// Type representing details about a video the viewer has requested to watch.
+type VideoDetails = {
+  id: string;
+  title: string;
+  description: string;
+  uploaderDisplayName: string;
+  uploaderPfp: string;
+  uploadDate: string;
+  views: number;
+  videoSignedUrl: string;
+};
+
 const execAsync = promisify(exec);
+
+/**
+ * Helper function to fetch uploader details.
+ * @param {string} uploaderId ID of the uploading user.
+ * @returns { uploaderDisplayName: string; uploaderPfp: string } Display name and link to PFP.
+ */
+async function getUploaderDetails(
+  uploaderId: string,
+): Promise<{ uploaderDisplayName: string; uploaderPfp: string }> {
+  const userRecord = await auth().getUser(uploaderId);
+  const uploaderDisplayName = userRecord.displayName || "";
+  const uploaderPfp = userRecord.photoURL || "";
+  return { uploaderDisplayName, uploaderPfp };
+}
 
 /**
  * Uploads a video and its thumbnail to Firebase Storage and adds metadata to Firestore.
@@ -131,7 +157,7 @@ export async function getVideoOptions(_req: Request, res: Response) {
 
     const videoOptions: VideoOption[] = await Promise.all(
       snapshot.docs.map(async (doc) => {
-        const data = doc.data();
+        const videoData = doc.data();
         const videoId = doc.id;
 
         // get thumbnail signed link
@@ -144,17 +170,17 @@ export async function getVideoOptions(_req: Request, res: Response) {
           });
 
         // get uploader display name and pfp
-        const userRecord = await auth().getUser(data.uploader);
-        const uploaderDisplayName = userRecord.displayName;
-        const uploaderPfp = userRecord.photoURL;
+        const { uploaderDisplayName, uploaderPfp } = await getUploaderDetails(
+          videoData.uploader,
+        );
 
         return {
           id: videoId,
-          title: data.title,
+          title: videoData.title,
           uploaderDisplayName: uploaderDisplayName || "",
           uploaderPfp: uploaderPfp || "",
-          uploadDate: data.uploadDate,
-          views: data.views,
+          uploadDate: videoData.uploadDate,
+          views: videoData.views,
           thumbnailSignedLink,
         };
       }),
@@ -165,6 +191,95 @@ export async function getVideoOptions(_req: Request, res: Response) {
     });
   } catch (error) {
     console.error("Error fetching video options:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
+ * Retrieves detailed information about a video, including a signed video URL and description.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ */
+export async function getVideoDetails(req: Request, res: Response) {
+  const { videoId } = req.params;
+  if (!videoId) {
+    res.status(400).json({ error: "Missing video ID" });
+    return;
+  }
+
+  try {
+    // get video metadata
+    const videoDoc = await db().collection("video").doc(videoId).get();
+    if (!videoDoc.exists) {
+      res.status(404).json({ error: "Video not found" });
+      return;
+    }
+    const videoData = videoDoc.data();
+    if (!videoData) {
+      res.status(500).json({ error: "Failed to retrieve video data" });
+      return;
+    }
+
+    // get video signed link
+    const [videoSignedUrl] = await storage()
+      .bucket()
+      .file(`videos/${videoId}`)
+      .getSignedUrl({
+        action: "read",
+        expires: Date.now() + 60 * 60 * 1000, // valid for 1 hour
+      });
+
+    // get uploader display name and pfp
+    const { uploaderDisplayName, uploaderPfp } = await getUploaderDetails(
+      videoData.uploader,
+    );
+
+    // Construct response object
+    const videoDetails: VideoDetails = {
+      id: videoId,
+      title: videoData.title,
+      description: videoData.description,
+      uploaderDisplayName,
+      uploaderPfp,
+      uploadDate: videoData.uploadDate,
+      views: videoData.views,
+      videoSignedUrl,
+    };
+
+    res.status(200).json(videoDetails);
+  } catch (error) {
+    console.error("Error fetching video details:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
+ * Increment the view count of a given video.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ */
+export async function incrementViewCount(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const { videoId } = req.params;
+  if (!videoId) {
+    res.status(400).json({ error: "Missing video ID" });
+    return;
+  }
+
+  try {
+    const videoRef = db().collection("video").doc(videoId);
+    await videoRef.update({
+      views: admin.firestore.FieldValue.increment(1),
+    });
+    res.status(200).json({ message: "View count incremented" });
+  } catch (error) {
+    console.error("Error incrementing view count:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Unknown error",
     });
