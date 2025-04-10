@@ -33,6 +33,7 @@ type VideoDetails = {
 type CommentDetails = {
   id: string;
   comment: string;
+  commenterId: string;
   commenterDisplayName: string;
   commenterPfp: string;
   commentTimestamp: string;
@@ -293,7 +294,7 @@ export async function incrementViewCount(
     await videoRef.update({
       views: admin.firestore.FieldValue.increment(1),
     });
-    res.status(204);
+    res.status(204).end();
   } catch (error) {
     console.error("Error incrementing view count:", error);
     res.status(500).json({
@@ -345,6 +346,7 @@ export async function getComments(req: Request, res: Response) {
         return {
           id: doc.id,
           comment,
+          commenterId: commenterId,
           commenterDisplayName: userDisplayName || "",
           commenterPfp: userPfp || "",
           commentTimestamp: timestamp,
@@ -392,6 +394,7 @@ export async function postComment(req: Request, res: Response) {
     const newComment: CommentDetails = {
       id: commentRef.id,
       comment,
+      commenterId,
       commenterDisplayName: userDisplayName || "",
       commenterPfp: userPfp || "",
       commentTimestamp: timestamp,
@@ -424,7 +427,8 @@ export async function deleteComment(req: Request, res: Response) {
       .collection("comments")
       .doc(commentId)
       .delete();
-    res.status(204);
+    console.log("deleted comment, preparing to respond.");
+    res.status(204).end();
   } catch (error) {
     console.error("Error deleting comment:", error);
     res.status(500).json({
