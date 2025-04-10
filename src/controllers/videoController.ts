@@ -12,7 +12,7 @@ type VideoOption = {
   title: string;
   uploaderDisplayName: string;
   uploaderPfp: string;
-  uploadDate: string;
+  uploadTimestamp: string;
   views: number;
   thumbnailSignedLink: string;
 };
@@ -24,25 +24,35 @@ type VideoDetails = {
   description: string;
   uploaderDisplayName: string;
   uploaderPfp: string;
-  uploadDate: string;
+  uploadTimestamp: string;
   views: number;
+  numComments: number;
   videoSignedUrl: string;
+};
+
+type CommentDetails = {
+  id: string;
+  comment: string;
+  commenterId: string;
+  commenterDisplayName: string;
+  commenterPfp: string;
+  commentTimestamp: string;
 };
 
 const execAsync = promisify(exec);
 
 /**
  * Helper function to fetch uploader details.
- * @param {string} uploaderId ID of the uploading user.
+ * @param {string} userId ID of the uploading user.
  * @returns { uploaderDisplayName: string; uploaderPfp: string } Display name and link to PFP.
  */
-async function getUploaderDetails(
-  uploaderId: string,
-): Promise<{ uploaderDisplayName: string; uploaderPfp: string }> {
-  const userRecord = await auth().getUser(uploaderId);
-  const uploaderDisplayName = userRecord.displayName || "";
-  const uploaderPfp = userRecord.photoURL || "";
-  return { uploaderDisplayName, uploaderPfp };
+async function getUserDetails(
+  userId: string,
+): Promise<{ userDisplayName: string; userPfp: string }> {
+  const userRecord = await auth().getUser(userId);
+  const userDisplayName = userRecord.displayName || "";
+  const userPfp = userRecord.photoURL || "";
+  return { userDisplayName: userDisplayName, userPfp: userPfp };
 }
 
 /**
@@ -125,7 +135,7 @@ export async function uploadVideo(req: Request, res: Response) {
       },
     );
 
-    res.status(200).json({
+    res.status(201).json({
       videoId,
     });
   } catch (error) {
@@ -170,16 +180,15 @@ export async function getVideoOptions(_req: Request, res: Response) {
           });
 
         // get uploader display name and pfp
-        const { uploaderDisplayName, uploaderPfp } = await getUploaderDetails(
-          videoData.uploader,
-        );
+        const { userDisplayName: uploaderDisplayName, userPfp: uploaderPfp } =
+          await getUserDetails(videoData.uploader);
 
         return {
           id: videoId,
           title: videoData.title,
           uploaderDisplayName: uploaderDisplayName || "",
           uploaderPfp: uploaderPfp || "",
-          uploadDate: videoData.uploadDate,
+          uploadTimestamp: videoData.uploadTimestamp,
           views: videoData.views,
           thumbnailSignedLink,
         };
@@ -232,9 +241,16 @@ export async function getVideoDetails(req: Request, res: Response) {
       });
 
     // get uploader display name and pfp
-    const { uploaderDisplayName, uploaderPfp } = await getUploaderDetails(
-      videoData.uploader,
-    );
+    const { userDisplayName: uploaderDisplayName, userPfp: uploaderPfp } =
+      await getUserDetails(videoData.uploader);
+
+    // count the number of comments in the comments subcollection
+    const commentsSnapshot = await db()
+      .collection("video")
+      .doc(videoId)
+      .collection("comments")
+      .get();
+    const numComments = commentsSnapshot.size;
 
     // Construct response object
     const videoDetails: VideoDetails = {
@@ -243,12 +259,13 @@ export async function getVideoDetails(req: Request, res: Response) {
       description: videoData.description,
       uploaderDisplayName,
       uploaderPfp,
-      uploadDate: videoData.uploadDate,
+      uploadTimestamp: videoData.uploadTimestamp,
       views: videoData.views,
+      numComments,
       videoSignedUrl,
     };
 
-    res.status(200).json(videoDetails);
+    res.status(201).json(videoDetails);
   } catch (error) {
     console.error("Error fetching video details:", error);
     res.status(500).json({
@@ -277,9 +294,143 @@ export async function incrementViewCount(
     await videoRef.update({
       views: admin.firestore.FieldValue.increment(1),
     });
-    res.status(200).json({ message: "View count incremented" });
+    res.status(204).end();
   } catch (error) {
     console.error("Error incrementing view count:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
+ * Retrieves paginated comments for a video.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ */
+export async function getComments(req: Request, res: Response) {
+  const { videoId } = req.params;
+  const { lastCommentId } = req.query;
+  if (!videoId) {
+    res.status(400).json({ error: "Missing video ID" });
+    return;
+  }
+
+  try {
+    // query firebase for 10 comments, ordered by timestamp
+    let query = db()
+      .collection("video")
+      .doc(videoId)
+      .collection("comments")
+      .orderBy("timestamp", "desc")
+      .limit(11);
+
+    // if request includes lastCommentId, start after that comment
+    if (lastCommentId) {
+      const lastCommentDoc = await db()
+        .collection("video")
+        .doc(videoId)
+        .collection("comments")
+        .doc(lastCommentId as string)
+        .get();
+      if (lastCommentDoc.exists) {
+        query = query.startAfter(lastCommentDoc);
+      }
+    }
+
+    const snapshot = await query.get();
+    const comments: CommentDetails[] = await Promise.all(
+      snapshot.docs.slice(0, 10).map(async (doc) => {
+        const { commenterId, comment, timestamp } = doc.data();
+        const { userDisplayName, userPfp } = await getUserDetails(commenterId);
+        return {
+          id: doc.id,
+          comment,
+          commenterId: commenterId,
+          commenterDisplayName: userDisplayName || "",
+          commenterPfp: userPfp || "",
+          commentTimestamp: timestamp,
+        };
+      }),
+    );
+
+    res.status(200).json({ comments, hasMore: snapshot.docs.length > 10 });
+  } catch (error) {
+    console.error("Error fetching comments:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
+ * Posts a comment to a video.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ */
+export async function postComment(req: Request, res: Response) {
+  const { videoId } = req.params;
+  const { comment, commenterId } = req.body;
+  if (!videoId || !comment || !commenterId) {
+    res.status(400).json({ error: "Missing required fields" });
+    return;
+  }
+
+  try {
+    const timestamp = new Date().toISOString();
+    const commentData = {
+      comment,
+      commenterId,
+      timestamp: timestamp,
+    };
+    const commentRef = await db()
+      .collection("video")
+      .doc(videoId)
+      .collection("comments")
+      .add(commentData);
+
+    // assemble new comment
+    const { userDisplayName, userPfp } = await getUserDetails(commenterId);
+    const newComment: CommentDetails = {
+      id: commentRef.id,
+      comment,
+      commenterId,
+      commenterDisplayName: userDisplayName || "",
+      commenterPfp: userPfp || "",
+      commentTimestamp: timestamp,
+    };
+    res.status(201).json(newComment);
+  } catch (error) {
+    console.error("Error posting comment:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
+ * Deletes a comment from a video.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ */
+export async function deleteComment(req: Request, res: Response) {
+  const { videoId, commentId } = req.params;
+  if (!videoId || !commentId) {
+    res.status(400).json({ error: "Missing required fields" });
+    return;
+  }
+
+  try {
+    await db()
+      .collection("video")
+      .doc(videoId)
+      .collection("comments")
+      .doc(commentId)
+      .delete();
+    console.log("deleted comment, preparing to respond.");
+    res.status(204).end();
+  } catch (error) {
+    console.error("Error deleting comment:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Unknown error",
     });
