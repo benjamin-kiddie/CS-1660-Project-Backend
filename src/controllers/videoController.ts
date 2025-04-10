@@ -285,3 +285,115 @@ export async function incrementViewCount(
     });
   }
 }
+
+/**
+ * Retrieves paginated comments for a video.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ */
+export async function getComments(req: Request, res: Response) {
+  const { videoId } = req.params;
+  const { lastCommentId } = req.query;
+  if (!videoId) {
+    res.status(400).json({ error: "Missing video ID" });
+    return;
+  }
+
+  try {
+    // query firebase for 10 comments, ordered by timestamp
+    let query = db()
+      .collection("video")
+      .doc(videoId)
+      .collection("comments")
+      .orderBy("timestamp", "desc")
+      .limit(Number(10));
+
+    // if request includes lastCommentId, start after that comment
+    if (lastCommentId) {
+      const lastCommentDoc = await db()
+        .collection("video")
+        .doc(videoId)
+        .collection("comments")
+        .doc(lastCommentId as string)
+        .get();
+      if (lastCommentDoc.exists) {
+        query = query.startAfter(lastCommentDoc);
+      }
+    }
+
+    const snapshot = await query.get();
+    const comments = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    res.status(200).json({ comments });
+  } catch (error) {
+    console.error("Error fetching comments:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
+ * Posts a comment to a video.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ */
+export async function postComment(req: Request, res: Response) {
+  const { videoId } = req.params;
+  const { comment, userId } = req.body;
+  if (!videoId || !comment || !userId) {
+    res.status(400).json({ error: "Missing required fields" });
+    return;
+  }
+
+  try {
+    const commentData = {
+      videoId,
+      comment,
+      userId,
+      timestamp: new Date().toISOString(),
+    };
+    await db()
+      .collection("video")
+      .doc(videoId)
+      .collection("comments")
+      .add(commentData);
+    res.status(200).json({ message: "Comment posted successfully" });
+  } catch (error) {
+    console.error("Error posting comment:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
+ * Deletes a comment from a video.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ */
+export async function deleteComment(req: Request, res: Response) {
+  const { videoId, commentId } = req.params;
+  if (!videoId || !commentId) {
+    res.status(400).json({ error: "Missing required fields" });
+    return;
+  }
+
+  try {
+    await db()
+      .collection("video")
+      .doc(videoId)
+      .collection("comments")
+      .doc(commentId)
+      .delete();
+    res.status(200).json({ message: "Comment deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting comment:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
