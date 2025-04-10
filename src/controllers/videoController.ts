@@ -12,7 +12,7 @@ type VideoOption = {
   title: string;
   uploaderDisplayName: string;
   uploaderPfp: string;
-  uploadDate: string;
+  uploadTimestamp: string;
   views: number;
   thumbnailSignedLink: string;
 };
@@ -24,25 +24,33 @@ type VideoDetails = {
   description: string;
   uploaderDisplayName: string;
   uploaderPfp: string;
-  uploadDate: string;
+  uploadTimestamp: string;
   views: number;
   videoSignedUrl: string;
+};
+
+type CommentDetails = {
+  id: string;
+  comment: string;
+  commenterDisplayName: string;
+  commenterPfp: string;
+  commentTimestamp: string;
 };
 
 const execAsync = promisify(exec);
 
 /**
  * Helper function to fetch uploader details.
- * @param {string} uploaderId ID of the uploading user.
+ * @param {string} userId ID of the uploading user.
  * @returns { uploaderDisplayName: string; uploaderPfp: string } Display name and link to PFP.
  */
-async function getUploaderDetails(
-  uploaderId: string,
-): Promise<{ uploaderDisplayName: string; uploaderPfp: string }> {
-  const userRecord = await auth().getUser(uploaderId);
-  const uploaderDisplayName = userRecord.displayName || "";
-  const uploaderPfp = userRecord.photoURL || "";
-  return { uploaderDisplayName, uploaderPfp };
+async function getUserDetails(
+  userId: string,
+): Promise<{ userDisplayName: string; userPfp: string }> {
+  const userRecord = await auth().getUser(userId);
+  const userDisplayName = userRecord.displayName || "";
+  const userPfp = userRecord.photoURL || "";
+  return { userDisplayName: userDisplayName, userPfp: userPfp };
 }
 
 /**
@@ -170,16 +178,15 @@ export async function getVideoOptions(_req: Request, res: Response) {
           });
 
         // get uploader display name and pfp
-        const { uploaderDisplayName, uploaderPfp } = await getUploaderDetails(
-          videoData.uploader,
-        );
+        const { userDisplayName: uploaderDisplayName, userPfp: uploaderPfp } =
+          await getUserDetails(videoData.uploader);
 
         return {
           id: videoId,
           title: videoData.title,
           uploaderDisplayName: uploaderDisplayName || "",
           uploaderPfp: uploaderPfp || "",
-          uploadDate: videoData.uploadDate,
+          uploadTimestamp: videoData.uploadTimestamp,
           views: videoData.views,
           thumbnailSignedLink,
         };
@@ -232,9 +239,8 @@ export async function getVideoDetails(req: Request, res: Response) {
       });
 
     // get uploader display name and pfp
-    const { uploaderDisplayName, uploaderPfp } = await getUploaderDetails(
-      videoData.uploader,
-    );
+    const { userDisplayName: uploaderDisplayName, userPfp: uploaderPfp } =
+      await getUserDetails(videoData.uploader);
 
     // Construct response object
     const videoDetails: VideoDetails = {
@@ -243,7 +249,7 @@ export async function getVideoDetails(req: Request, res: Response) {
       description: videoData.description,
       uploaderDisplayName,
       uploaderPfp,
-      uploadDate: videoData.uploadDate,
+      uploadTimestamp: videoData.uploadTimestamp,
       views: videoData.views,
       videoSignedUrl,
     };
@@ -322,10 +328,19 @@ export async function getComments(req: Request, res: Response) {
     }
 
     const snapshot = await query.get();
-    const comments = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
+    const comments: CommentDetails[] = await Promise.all(
+      snapshot.docs.map(async (doc) => {
+        const { commenterId, comment, timestamp } = doc.data();
+        const { userDisplayName, userPfp } = await getUserDetails(commenterId);
+        return {
+          id: doc.id,
+          comment,
+          commenterDisplayName: userDisplayName || "",
+          commenterPfp: userPfp || "",
+          commentTimestamp: timestamp,
+        };
+      }),
+    );
 
     res.status(200).json({ comments });
   } catch (error) {
@@ -343,17 +358,16 @@ export async function getComments(req: Request, res: Response) {
  */
 export async function postComment(req: Request, res: Response) {
   const { videoId } = req.params;
-  const { comment, userId } = req.body;
-  if (!videoId || !comment || !userId) {
+  const { comment, commenterId } = req.body;
+  if (!videoId || !comment || !commenterId) {
     res.status(400).json({ error: "Missing required fields" });
     return;
   }
 
   try {
     const commentData = {
-      videoId,
       comment,
-      userId,
+      commenterId,
       timestamp: new Date().toISOString(),
     };
     await db()
