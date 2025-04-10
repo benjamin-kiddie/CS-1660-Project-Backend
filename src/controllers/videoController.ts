@@ -26,6 +26,7 @@ type VideoDetails = {
   uploaderPfp: string;
   uploadTimestamp: string;
   views: number;
+  numComments: number;
   videoSignedUrl: string;
 };
 
@@ -133,7 +134,7 @@ export async function uploadVideo(req: Request, res: Response) {
       },
     );
 
-    res.status(200).json({
+    res.status(201).json({
       videoId,
     });
   } catch (error) {
@@ -242,6 +243,14 @@ export async function getVideoDetails(req: Request, res: Response) {
     const { userDisplayName: uploaderDisplayName, userPfp: uploaderPfp } =
       await getUserDetails(videoData.uploader);
 
+    // count the number of comments in the comments subcollection
+    const commentsSnapshot = await db()
+      .collection("video")
+      .doc(videoId)
+      .collection("comments")
+      .get();
+    const numComments = commentsSnapshot.size;
+
     // Construct response object
     const videoDetails: VideoDetails = {
       id: videoId,
@@ -251,10 +260,11 @@ export async function getVideoDetails(req: Request, res: Response) {
       uploaderPfp,
       uploadTimestamp: videoData.uploadTimestamp,
       views: videoData.views,
+      numComments,
       videoSignedUrl,
     };
 
-    res.status(200).json(videoDetails);
+    res.status(201).json(videoDetails);
   } catch (error) {
     console.error("Error fetching video details:", error);
     res.status(500).json({
@@ -283,7 +293,7 @@ export async function incrementViewCount(
     await videoRef.update({
       views: admin.firestore.FieldValue.increment(1),
     });
-    res.status(200).json({ message: "View count incremented" });
+    res.status(204);
   } catch (error) {
     console.error("Error incrementing view count:", error);
     res.status(500).json({
@@ -312,7 +322,7 @@ export async function getComments(req: Request, res: Response) {
       .doc(videoId)
       .collection("comments")
       .orderBy("timestamp", "desc")
-      .limit(Number(10));
+      .limit(11);
 
     // if request includes lastCommentId, start after that comment
     if (lastCommentId) {
@@ -329,7 +339,7 @@ export async function getComments(req: Request, res: Response) {
 
     const snapshot = await query.get();
     const comments: CommentDetails[] = await Promise.all(
-      snapshot.docs.map(async (doc) => {
+      snapshot.docs.slice(0, 10).map(async (doc) => {
         const { commenterId, comment, timestamp } = doc.data();
         const { userDisplayName, userPfp } = await getUserDetails(commenterId);
         return {
@@ -342,7 +352,7 @@ export async function getComments(req: Request, res: Response) {
       }),
     );
 
-    res.status(200).json({ comments });
+    res.status(200).json({ comments, hasMore: snapshot.docs.length > 10 });
   } catch (error) {
     console.error("Error fetching comments:", error);
     res.status(500).json({
@@ -365,17 +375,28 @@ export async function postComment(req: Request, res: Response) {
   }
 
   try {
+    const timestamp = new Date().toISOString();
     const commentData = {
       comment,
       commenterId,
-      timestamp: new Date().toISOString(),
+      timestamp: timestamp,
     };
-    await db()
+    const commentRef = await db()
       .collection("video")
       .doc(videoId)
       .collection("comments")
       .add(commentData);
-    res.status(200).json({ message: "Comment posted successfully" });
+
+    // assemble new comment
+    const { userDisplayName, userPfp } = await getUserDetails(commenterId);
+    const newComment: CommentDetails = {
+      id: commentRef.id,
+      comment,
+      commenterDisplayName: userDisplayName || "",
+      commenterPfp: userPfp || "",
+      commentTimestamp: timestamp,
+    };
+    res.status(201).json(newComment);
   } catch (error) {
     console.error("Error posting comment:", error);
     res.status(500).json({
@@ -403,7 +424,7 @@ export async function deleteComment(req: Request, res: Response) {
       .collection("comments")
       .doc(commentId)
       .delete();
-    res.status(200).json({ message: "Comment deleted successfully" });
+    res.status(204);
   } catch (error) {
     console.error("Error deleting comment:", error);
     res.status(500).json({
