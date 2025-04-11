@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import path from "path";
+import seedrandom from "seedrandom";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { Request, Response } from "express";
@@ -155,15 +156,26 @@ export async function uploadVideo(req: Request, res: Response) {
 
 /**
  * Retrieves video options from Firestore and generates signed URLs for thumbnails.
- * @param {Request} _req Request object.
+ * Uses seedrandom to "randomly" return video options for discoverability while allowing pagination.
+ * @param {Request} req Request object.
  * @param {Response} res Response object.
  */
-export async function getVideoOptions(_req: Request, res: Response) {
-  // TODO: Implement semi-random ordering for variety
-  // TODO: Implement pagination for large number of videos
+export async function getVideoOptions(req: Request, res: Response) {
+  const { seed, page = 1, limit = 10, excludeId } = req.query;
+
   try {
     const videoCollection = db().collection("video");
-    const snapshot = await videoCollection.get();
+    let query: FirebaseFirestore.Query = videoCollection;
+    if (excludeId) {
+      query = query.where(
+        admin.firestore.FieldPath.documentId(),
+        "!=",
+        excludeId,
+      );
+    }
+
+    // Fetch the videos
+    const snapshot = await query.get();
 
     const videoOptions: VideoOption[] = await Promise.all(
       snapshot.docs.map(async (doc) => {
@@ -195,8 +207,20 @@ export async function getVideoOptions(_req: Request, res: Response) {
       }),
     );
 
+    // use seed for consistent randomization across a session
+    const rng = seedrandom(String(seed) || Date.now().toString());
+    const randomizedVideos = videoOptions.sort(() => rng() - 0.5);
+
+    // paginate results
+    const startIndex = (Number(page) - 1) * Number(limit);
+    const paginatedVideos = randomizedVideos.slice(
+      startIndex,
+      startIndex + Number(limit),
+    );
+
     res.status(200).json({
-      videoOptions: videoOptions,
+      videoOptions: paginatedVideos,
+      hasMore: startIndex + Number(limit) < randomizedVideos.length,
     });
   } catch (error) {
     console.error("Error fetching video options:", error);
