@@ -10,6 +10,7 @@ import {
   incrementViewCount,
   postComment,
   uploadVideo,
+  incrementLikeDislikeCount,
 } from "../controllers/videoController";
 
 const videoRouter = Router();
@@ -31,6 +32,7 @@ videoRouter
   .post("/:videoId/view", authenticateUser, incrementViewCount)
   .get("/:videoId/comments", authenticateUser, getComments)
   .post("/:videoId/comments", authenticateUser, postComment)
-  .delete("/:videoId/comments/:commentId", authenticateUser, deleteComment);
+  .delete("/:videoId/comments/:commentId", authenticateUser, deleteComment)
+  .post("/:videoId/:type", authenticateUser, incrementLikeDislikeCount);
 
 export default videoRouter;
