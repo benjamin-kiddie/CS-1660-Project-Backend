@@ -28,6 +28,9 @@ type VideoDetails = {
   uploadTimestamp: string;
   views: number;
   numComments: number;
+  likes: number;
+  dislikes: number;
+  userLikeStatus: 'like' | 'dislike' | null;
   videoSignedUrl: string;
 };
 
@@ -101,6 +104,8 @@ export async function uploadVideo(req: Request, res: Response) {
       description,
       uploader,
       views: 0,
+      likes: 0,
+      dislikes: 0,
       uploadDate: new Date().toISOString(),
     };
     const docRef = await db().collection("video").add(videoData);
@@ -276,6 +281,19 @@ export async function getVideoDetails(req: Request, res: Response) {
       .get();
     const numComments = commentsSnapshot.size;
 
+    // get user's reaction status
+    let userLikeStatus: 'like' | 'dislike' | null = null;
+    if (req.user) {
+      const userId = (req.user as any).uid;
+      const reactionDoc = await db()
+        .collection("video")
+        .doc(videoId)
+        .collection("reactions")
+        .doc(userId)
+        .get();
+      userLikeStatus = reactionDoc.exists ? reactionDoc.data()?.type : null;
+    }
+
     // Construct response object
     const videoDetails: VideoDetails = {
       id: videoId,
@@ -286,6 +304,9 @@ export async function getVideoDetails(req: Request, res: Response) {
       uploadTimestamp: videoData.uploadTimestamp,
       views: videoData.views,
       numComments,
+      likes: videoData.likes,
+      dislikes: videoData.dislikes,
+      userLikeStatus,
       videoSignedUrl,
     };
 
@@ -455,6 +476,68 @@ export async function deleteComment(req: Request, res: Response) {
     res.status(204).end();
   } catch (error) {
     console.error("Error deleting comment:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
+ * Increment the like/dislike count of a given video.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ */
+export async function incrementLikeDislikeCount(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const { videoId, type } = req.params;
+  if (!videoId) {
+    res.status(400).json({ error: "Missing video ID" });
+    return;
+  }
+
+  if (type !== "like" && type !== "dislike") {
+    res.status(400).json({ error: "Invalid type - must be 'like' or 'dislike'" });
+    return;
+  }
+
+  const userId = (req.user as any).uid;
+
+  try {
+    const videoRef = db().collection("video").doc(videoId);
+    const reactionRef = videoRef.collection("reactions").doc(userId);
+
+    const reactionDoc = await reactionRef.get();
+    const currentReaction = reactionDoc.exists ? reactionDoc.data()?.type : null;
+
+    let likeDelta = 0;
+    let dislikeDelta = 0;
+
+    if (currentReaction === type) {
+      await reactionRef.delete();
+      likeDelta = type === 'like' ? -1 : 0;
+      dislikeDelta = type === 'dislike' ? -1 : 0;
+    } else {
+      await reactionRef.set({ type });
+      
+      if (currentReaction) {
+        likeDelta += currentReaction === 'like' ? -1 : 0;
+        dislikeDelta += currentReaction === 'dislike' ? -1 : 0;
+      }
+      
+      likeDelta += type === 'like' ? 1 : 0;
+      dislikeDelta += type === 'dislike' ? 1 : 0;
+    }
+
+    await videoRef.update({
+      likes: admin.firestore.FieldValue.increment(likeDelta),
+      dislikes: admin.firestore.FieldValue.increment(dislikeDelta),
+    });
+
+    res.status(200).json({ message: "Reaction updated" });
+  } catch (error) {
+    console.error("Error updating reaction:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Unknown error",
     });
