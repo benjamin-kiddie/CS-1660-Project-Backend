@@ -236,6 +236,83 @@ export async function getVideoOptions(req: Request, res: Response) {
 }
 
 /**
+ * Retrieves user's video options from Firestore and generates signed URLs for thumbnails.
+ * Uses users ID to return user's uploaded video options.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ */
+ export async function getUserVideoOptions(req: Request, res: Response) {
+  const { userId, page = 1, limit = 10, excludeId } = req.query;
+
+  try {
+    const videoCollection = db().collection("video");
+    let query: FirebaseFirestore.Query = videoCollection.where("upload", "==", userId);
+    if (excludeId) {
+      query = query.where(
+        admin.firestore.FieldPath.documentId(),
+        "!=",
+        excludeId,
+      );
+    }
+
+    // Fetch the videos
+    const snapshot = await query.get();
+
+    const videoOptions: VideoOption[] = await Promise.all(
+      snapshot.docs.map(async (doc) => {
+        const videoData = doc.data();
+        const videoId = doc.id;
+
+        // get thumbnail signed link
+        const [thumbnailSignedLink] = await storage()
+          .bucket()
+          .file(`thumbnails/${videoId}`)
+          .getSignedUrl({
+            action: "read",
+            expires: Date.now() + 60 * 60 * 1000, // valid for 1 hour
+          });
+
+        // get uploader display name and pfp
+        const { userDisplayName: uploaderDisplayName, userPfp: uploaderPfp } =
+          await getUserDetails(videoData.uploader);
+
+        return {
+          id: videoId,
+          title: videoData.title,
+          uploaderDisplayName: uploaderDisplayName || "",
+          uploaderPfp: uploaderPfp || "",
+          uploadTimestamp: videoData.uploadTimestamp,
+          views: videoData.views,
+          thumbnailSignedLink,
+        };
+      }),
+    );
+
+    // sort videos by time
+    const sortedVideos = videoOptions.sort(
+      (a, b) => new Date(b.uploadTimestamp).getTime() - new Date(a.uploadTimestamp).getTime(),
+    );
+
+    // paginate results
+    const startIndex = (Number(page) - 1) * Number(limit);
+    const paginatedVideos = sortedVideos.slice(
+      startIndex,
+      startIndex + Number(limit),
+    );
+
+    res.status(200).json({
+      videoOptions: paginatedVideos,
+      hasMore: startIndex + Number(limit) < sortedVideos.length,
+    });
+  } catch (error) {
+    console.error("Error fetching video options:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
  * Retrieves detailed information about a video, including a signed video URL and description.
  * @param {Request} req Request object.
  * @param {Response} res Response object.
