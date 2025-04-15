@@ -11,6 +11,7 @@ import {
   postComment,
   uploadVideo,
   incrementLikeDislikeCount,
+  searchVideoOptions,
 } from "../controllers/videoController";
 
 const videoRouter = Router();
@@ -28,6 +29,7 @@ videoRouter
     uploadVideo,
   )
   .get("/", authenticateUser, getVideoOptions)
+  .get("/search", authenticateUser, searchVideoOptions)
   .get("/:videoId", authenticateUser, getVideoDetails)
   .post("/:videoId/view", authenticateUser, incrementViewCount)
   .get("/:videoId/comments", authenticateUser, getComments)
