@@ -30,7 +30,7 @@ type VideoDetails = {
   numComments: number;
   likes: number;
   dislikes: number;
-  userLikeStatus: 'like' | 'dislike' | null;
+  userLikeStatus: "like" | "dislike" | null;
   videoSignedUrl: string;
 };
 
@@ -166,7 +166,10 @@ export async function uploadVideo(req: Request, res: Response) {
  * @param {Response} res Response object.
  */
 export async function getVideoOptions(req: Request, res: Response) {
-  const { seed, page = 1, limit = 10, excludeId } = req.query;
+  const seed = (req.query.seed as string)?.toLowerCase() || "";
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 10;
+  const excludeId = req.query.excludeId as string | undefined;
 
   try {
     const videoCollection = db().collection("video");
@@ -179,7 +182,7 @@ export async function getVideoOptions(req: Request, res: Response) {
       );
     }
 
-    // Fetch the videos
+    // fetch the videos
     const snapshot = await query.get();
 
     const videoOptions: VideoOption[] = await Promise.all(
@@ -217,15 +220,15 @@ export async function getVideoOptions(req: Request, res: Response) {
     const randomizedVideos = videoOptions.sort(() => rng() - 0.5);
 
     // paginate results
-    const startIndex = (Number(page) - 1) * Number(limit);
+    const startIndex = (page - 1) * limit;
     const paginatedVideos = randomizedVideos.slice(
       startIndex,
-      startIndex + Number(limit),
+      startIndex + limit,
     );
 
     res.status(200).json({
       videoOptions: paginatedVideos,
-      hasMore: startIndex + Number(limit) < randomizedVideos.length,
+      hasMore: startIndex + limit < randomizedVideos.length,
     });
   } catch (error) {
     console.error("Error fetching video options:", error);
@@ -241,21 +244,18 @@ export async function getVideoOptions(req: Request, res: Response) {
  * @param {Request} req Request object.
  * @param {Response} res Response object.
  */
- export async function getUserVideoOptions(req: Request, res: Response) {
-  const { userId, page = 1, limit = 10, excludeId } = req.query;
+export async function getUserVideoOptions(req: Request, res: Response) {
+  const userId = (req.query.userId as string)?.toLowerCase() || "";
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 10;
 
   try {
     const videoCollection = db().collection("video");
-    let query: FirebaseFirestore.Query = videoCollection.where("upload", "==", userId);
-    if (excludeId) {
-      query = query.where(
-        admin.firestore.FieldPath.documentId(),
-        "!=",
-        excludeId,
-      );
-    }
+    let query: FirebaseFirestore.Query = videoCollection
+      .where("uploader", "==", userId)
+      .orderBy("uploadTimestamp", "desc");
 
-    // Fetch the videos
+    // fetch the videos
     const snapshot = await query.get();
 
     const videoOptions: VideoOption[] = await Promise.all(
@@ -290,22 +290,96 @@ export async function getVideoOptions(req: Request, res: Response) {
 
     // sort videos by time
     const sortedVideos = videoOptions.sort(
-      (a, b) => new Date(b.uploadTimestamp).getTime() - new Date(a.uploadTimestamp).getTime(),
+      (a, b) =>
+        new Date(b.uploadTimestamp).getTime() -
+        new Date(a.uploadTimestamp).getTime(),
     );
 
     // paginate results
-    const startIndex = (Number(page) - 1) * Number(limit);
-    const paginatedVideos = sortedVideos.slice(
-      startIndex,
-      startIndex + Number(limit),
-    );
+    const startIndex = (page - 1) * limit;
+    const paginatedVideos = sortedVideos.slice(startIndex, startIndex + limit);
 
     res.status(200).json({
       videoOptions: paginatedVideos,
-      hasMore: startIndex + Number(limit) < sortedVideos.length,
+      hasMore: startIndex + limit < sortedVideos.length,
     });
   } catch (error) {
     console.error("Error fetching video options:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
+ * Retrieves videos from firestore that match the search query.
+ * Uses in-memory filtering and pagination (not recommended for large datasets).
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ */
+export async function searchVideoOptions(req: Request, res: Response) {
+  const query = (req.query.query as string)?.toLowerCase() || "";
+  const page = parseInt(req.query.page as string) || 1;
+  const limit = parseInt(req.query.limit as string) || 10;
+
+  try {
+    // fetch only title and id before filtering, order by views
+    const snapshot = await db()
+      .collection("video")
+      .orderBy("views", "desc")
+      .get();
+
+    const allVideos = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      title: doc.data().title,
+    }));
+
+    // filter videos by title case-insensitively
+    const filtered = allVideos.filter((video) =>
+      video.title?.toLowerCase().includes(query),
+    );
+
+    // paginate the filtered results
+    const start = (page - 1) * limit;
+    const paginated = filtered.slice(start, start + limit);
+
+    // fetch full video details for the paginated results
+    const videoOptions = await Promise.all(
+      paginated.map(async (video) => {
+        const videoDoc = await db().collection("video").doc(video.id).get();
+        const videoData = videoDoc.data();
+
+        // get thumbnail signed link
+        const [thumbnailSignedLink] = await storage()
+          .bucket()
+          .file(`thumbnails/${video.id}`)
+          .getSignedUrl({
+            action: "read",
+            expires: Date.now() + 60 * 60 * 1000, // valid for 1 hour
+          });
+
+        // get uploader display name and profile picture
+        const { userDisplayName: uploaderDisplayName, userPfp: uploaderPfp } =
+          await getUserDetails(videoData?.uploader);
+
+        return {
+          id: video.id,
+          title: videoData?.title,
+          uploaderDisplayName: uploaderDisplayName || "",
+          uploaderPfp: uploaderPfp || "",
+          uploadTimestamp: videoData?.uploadTimestamp,
+          views: videoData?.views,
+          thumbnailSignedLink,
+        };
+      }),
+    );
+
+    res.json({
+      videoOptions: videoOptions,
+      hasMore: start + limit < filtered.length,
+    });
+  } catch (error) {
+    console.error("Error searching videos:", error);
     res.status(500).json({
       error: error instanceof Error ? error.message : "Unknown error",
     });
@@ -359,7 +433,7 @@ export async function getVideoDetails(req: Request, res: Response) {
     const numComments = commentsSnapshot.size;
 
     // get user's reaction status
-    let userLikeStatus: 'like' | 'dislike' | null = null;
+    let userLikeStatus: "like" | "dislike" | null = null;
     if (req.user) {
       const userId = (req.user as any).uid;
       const reactionDoc = await db()
@@ -575,7 +649,9 @@ export async function incrementLikeDislikeCount(
   }
 
   if (type !== "like" && type !== "dislike") {
-    res.status(400).json({ error: "Invalid type - must be 'like' or 'dislike'" });
+    res
+      .status(400)
+      .json({ error: "Invalid type - must be 'like' or 'dislike'" });
     return;
   }
 
@@ -586,25 +662,27 @@ export async function incrementLikeDislikeCount(
     const reactionRef = videoRef.collection("reactions").doc(userId);
 
     const reactionDoc = await reactionRef.get();
-    const currentReaction = reactionDoc.exists ? reactionDoc.data()?.type : null;
+    const currentReaction = reactionDoc.exists
+      ? reactionDoc.data()?.type
+      : null;
 
     let likeDelta = 0;
     let dislikeDelta = 0;
 
     if (currentReaction === type) {
       await reactionRef.delete();
-      likeDelta = type === 'like' ? -1 : 0;
-      dislikeDelta = type === 'dislike' ? -1 : 0;
+      likeDelta = type === "like" ? -1 : 0;
+      dislikeDelta = type === "dislike" ? -1 : 0;
     } else {
       await reactionRef.set({ type });
-      
+
       if (currentReaction) {
-        likeDelta += currentReaction === 'like' ? -1 : 0;
-        dislikeDelta += currentReaction === 'dislike' ? -1 : 0;
+        likeDelta += currentReaction === "like" ? -1 : 0;
+        dislikeDelta += currentReaction === "dislike" ? -1 : 0;
       }
-      
-      likeDelta += type === 'like' ? 1 : 0;
-      dislikeDelta += type === 'dislike' ? 1 : 0;
+
+      likeDelta += type === "like" ? 1 : 0;
+      dislikeDelta += type === "dislike" ? 1 : 0;
     }
 
     await videoRef.update({
