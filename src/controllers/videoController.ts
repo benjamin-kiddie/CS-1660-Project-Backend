@@ -3,7 +3,7 @@ import path from "path";
 import seedrandom from "seedrandom";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { Request, Response } from "express";
+import { NextFunction, Request, Response } from "express";
 import admin, { db, storage } from "../config/firebase";
 import { auth } from "firebase-admin";
 
@@ -63,17 +63,27 @@ async function getUserDetails(
  * Uploads a video and its thumbnail to Firebase Storage and adds metadata to Firestore.
  * @param {Request} req Request object.
  * @param {Response} res Response object.
+ * @param {NextFunction} next Next function.
  */
-export async function uploadVideo(req: Request, res: Response) {
+export async function uploadVideo(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
   let videoFile: Express.Multer.File | null = null;
   let thumbnailFile: Express.Multer.File | null = null;
   let generatedThumbnailPath: string | null = null;
 
   try {
+    // get uplader ID from token
+    const token = req.headers.authorization?.split(" ")[1];
+    const decodedToken = await admin.auth().verifyIdToken(token || "");
+    const userId = decodedToken.uid;
+
     // parse JSON data
-    const { title, description, uploader } = req.body;
-    if (!title || !uploader) {
-      res.status(400).json({ error: "Missing required fields" });
+    const { title, description } = req.body;
+    if (!title) {
+      res.status(400).json({ error: "Missing required field" });
       return;
     }
 
@@ -102,11 +112,11 @@ export async function uploadVideo(req: Request, res: Response) {
     const videoData = {
       title,
       description,
-      uploader,
+      uploader: userId,
       views: 0,
       likes: 0,
       dislikes: 0,
-      uploadDate: new Date().toISOString(),
+      uploadTimestamp: new Date().toISOString(),
     };
     const docRef = await db().collection("video").add(videoData);
     const videoId = docRef.id;
@@ -145,11 +155,7 @@ export async function uploadVideo(req: Request, res: Response) {
       videoId,
     });
   } catch (error) {
-    console.error("Error uploading video:", error);
-    res.status(500).json({
-      error: "Failed to upload video",
-      message: error instanceof Error ? error.message : "Unknown error",
-    });
+    next(error);
   } finally {
     if (videoFile) fs.unlinkSync(videoFile.path);
     if (thumbnailFile) fs.unlinkSync(thumbnailFile.path);
@@ -164,12 +170,17 @@ export async function uploadVideo(req: Request, res: Response) {
  * Uses seedrandom to "randomly" return video options for discoverability while allowing pagination.
  * @param {Request} req Request object.
  * @param {Response} res Response object.
+ * @param {NextFunction} next Next function.
  */
-export async function getVideoOptions(req: Request, res: Response) {
+export async function getVideoOptions(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
   const seed = (req.query.seed as string)?.toLowerCase() || "";
   const page = parseInt(req.query.page as string) || 1;
   const limit = parseInt(req.query.limit as string) || 10;
-  const excludeId = req.query.excludeId as string | undefined;
+  const excludeId = (req.query.excludeId as string) || undefined;
 
   try {
     const videoCollection = db().collection("video");
@@ -231,25 +242,35 @@ export async function getVideoOptions(req: Request, res: Response) {
       hasMore: startIndex + limit < randomizedVideos.length,
     });
   } catch (error) {
-    console.error("Error fetching video options:", error);
-    res.status(500).json({
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
+    next(error);
   }
 }
 
 /**
  * Retrieves user's video options from Firestore and generates signed URLs for thumbnails.
- * Uses users ID to return user's uploaded video options.
+ * Uses user ID to return user's uploaded video options.
  * @param {Request} req Request object.
  * @param {Response} res Response object.
+ * @param {NextFunction} next Next function.
  */
-export async function getUserVideoOptions(req: Request, res: Response) {
-  const userId = (req.query.userId as string)?.toLowerCase() || "";
+export async function getUserVideoOptions(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  const { userId } = req.params;
+  if (!userId) {
+    res.status(400).json({ error: "Missing user ID" });
+    return;
+  }
   const page = parseInt(req.query.page as string) || 1;
   const limit = parseInt(req.query.limit as string) || 10;
 
   try {
+    // we already know who the uploader is, so get their details
+    const { userDisplayName: uploaderDisplayName, userPfp: uploaderPfp } =
+      await getUserDetails(userId);
+
     const videoCollection = db().collection("video");
     let query: FirebaseFirestore.Query = videoCollection
       .where("uploader", "==", userId)
@@ -272,10 +293,6 @@ export async function getUserVideoOptions(req: Request, res: Response) {
             expires: Date.now() + 60 * 60 * 1000, // valid for 1 hour
           });
 
-        // get uploader display name and pfp
-        const { userDisplayName: uploaderDisplayName, userPfp: uploaderPfp } =
-          await getUserDetails(videoData.uploader);
-
         return {
           id: videoId,
           title: videoData.title,
@@ -288,26 +305,16 @@ export async function getUserVideoOptions(req: Request, res: Response) {
       }),
     );
 
-    // sort videos by time
-    const sortedVideos = videoOptions.sort(
-      (a, b) =>
-        new Date(b.uploadTimestamp).getTime() -
-        new Date(a.uploadTimestamp).getTime(),
-    );
-
     // paginate results
     const startIndex = (page - 1) * limit;
-    const paginatedVideos = sortedVideos.slice(startIndex, startIndex + limit);
+    const paginatedVideos = videoOptions.slice(startIndex, startIndex + limit);
 
     res.status(200).json({
       videoOptions: paginatedVideos,
-      hasMore: startIndex + limit < sortedVideos.length,
+      hasMore: startIndex + limit < videoOptions.length,
     });
   } catch (error) {
-    console.error("Error fetching video options:", error);
-    res.status(500).json({
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
+    next(error);
   }
 }
 
@@ -316,8 +323,13 @@ export async function getUserVideoOptions(req: Request, res: Response) {
  * Uses in-memory filtering and pagination (not recommended for large datasets).
  * @param {Request} req Request object.
  * @param {Response} res Response object.
+ * @param {NextFunction} next Next function.
  */
-export async function searchVideoOptions(req: Request, res: Response) {
+export async function searchVideoOptions(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
   const query = (req.query.query as string)?.toLowerCase() || "";
   const page = parseInt(req.query.page as string) || 1;
   const limit = parseInt(req.query.limit as string) || 10;
@@ -379,10 +391,7 @@ export async function searchVideoOptions(req: Request, res: Response) {
       hasMore: start + limit < filtered.length,
     });
   } catch (error) {
-    console.error("Error searching videos:", error);
-    res.status(500).json({
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
+    next(error);
   }
 }
 
@@ -390,8 +399,13 @@ export async function searchVideoOptions(req: Request, res: Response) {
  * Retrieves detailed information about a video, including a signed video URL and description.
  * @param {Request} req Request object.
  * @param {Response} res Response object.
+ * @param {NextFunction} next Next function.
  */
-export async function getVideoDetails(req: Request, res: Response) {
+export async function getVideoDetails(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
   const { videoId } = req.params;
   if (!videoId) {
     res.status(400).json({ error: "Missing video ID" });
@@ -463,10 +477,70 @@ export async function getVideoDetails(req: Request, res: Response) {
 
     res.status(201).json(videoDetails);
   } catch (error) {
-    console.error("Error fetching video details:", error);
-    res.status(500).json({
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
+    next(error);
+  }
+}
+
+/**
+ * Deletes a video and its associated files from Firestore and Firebase Storage.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ * @param {NextFunction} next Next function.
+ */
+export async function deleteVideo(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  const { videoId } = req.params;
+  if (!videoId) {
+    res.status(400).json({ error: "Missing video ID" });
+    return;
+  }
+
+  try {
+    // make sure the requesting user is the uploader
+    const token = req.headers.authorization?.split(" ")[1];
+    const decodedToken = await admin.auth().verifyIdToken(token || "");
+    const userId = decodedToken.uid;
+    const videoDoc = await db().collection("video").doc(videoId).get();
+    if (!videoDoc.exists) {
+      res.status(404).json({ error: "Video not found" });
+      return;
+    }
+    const videoData = videoDoc.data();
+    if (videoData?.uploader !== userId) {
+      res.status(403).json({ error: "Unauthorized to delete this video" });
+      return;
+    }
+
+    // delete comments subcollection
+    const commentsSnapshot = await db()
+      .collection("video")
+      .doc(videoId)
+      .collection("comments")
+      .get();
+    await Promise.all(commentsSnapshot.docs.map((doc) => doc.ref.delete()));
+
+    // delete reactions subcollection
+    const reactionsSnapshot = await db()
+      .collection("video")
+      .doc(videoId)
+      .collection("reactions")
+      .get();
+    await Promise.all(reactionsSnapshot.docs.map((doc) => doc.ref.delete()));
+
+    // delete video document from Firestore
+    await db().collection("video").doc(videoId).delete();
+
+    // delete video and thumbnail from Firebase Storage
+    const bucket = storage().bucket();
+    await bucket.file(`videos/${videoId}`).delete();
+    await bucket.file(`thumbnails/${videoId}`).delete();
+
+    res.status(204).end();
+  } catch (error) {
+    next(error);
   }
 }
 
@@ -474,10 +548,12 @@ export async function getVideoDetails(req: Request, res: Response) {
  * Increment the view count of a given video.
  * @param {Request} req Request object.
  * @param {Response} res Response object.
+ * @param {NextFunction} next Next function.
  */
 export async function incrementViewCount(
   req: Request,
   res: Response,
+  next: NextFunction,
 ): Promise<void> {
   const { videoId } = req.params;
   if (!videoId) {
@@ -492,10 +568,7 @@ export async function incrementViewCount(
     });
     res.status(204).end();
   } catch (error) {
-    console.error("Error incrementing view count:", error);
-    res.status(500).json({
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
+    next(error);
   }
 }
 
@@ -503,8 +576,13 @@ export async function incrementViewCount(
  * Retrieves paginated comments for a video.
  * @param {Request} req Request object.
  * @param {Response} res Response object.
+ * @param {NextFunction} next Next function.
  */
-export async function getComments(req: Request, res: Response) {
+export async function getComments(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
   const { videoId } = req.params;
   const { lastCommentId } = req.query;
   if (!videoId) {
@@ -552,10 +630,7 @@ export async function getComments(req: Request, res: Response) {
 
     res.status(200).json({ comments, hasMore: snapshot.docs.length > 10 });
   } catch (error) {
-    console.error("Error fetching comments:", error);
-    res.status(500).json({
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
+    next(error);
   }
 }
 
@@ -563,8 +638,13 @@ export async function getComments(req: Request, res: Response) {
  * Posts a comment to a video.
  * @param {Request} req Request object.
  * @param {Response} res Response object.
+ * @param {NextFunction} next Next function.
  */
-export async function postComment(req: Request, res: Response) {
+export async function postComment(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
   const { videoId } = req.params;
   const { comment, commenterId } = req.body;
   if (!videoId || !comment || !commenterId) {
@@ -597,10 +677,7 @@ export async function postComment(req: Request, res: Response) {
     };
     res.status(201).json(newComment);
   } catch (error) {
-    console.error("Error posting comment:", error);
-    res.status(500).json({
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
+    next(error);
   }
 }
 
@@ -608,8 +685,13 @@ export async function postComment(req: Request, res: Response) {
  * Deletes a comment from a video.
  * @param {Request} req Request object.
  * @param {Response} res Response object.
+ * @param {NextFunction} next Next function.
  */
-export async function deleteComment(req: Request, res: Response) {
+export async function deleteComment(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
   const { videoId, commentId } = req.params;
   if (!videoId || !commentId) {
     res.status(400).json({ error: "Missing required fields" });
@@ -623,13 +705,9 @@ export async function deleteComment(req: Request, res: Response) {
       .collection("comments")
       .doc(commentId)
       .delete();
-    console.log("deleted comment, preparing to respond.");
     res.status(204).end();
   } catch (error) {
-    console.error("Error deleting comment:", error);
-    res.status(500).json({
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
+    next(error);
   }
 }
 
@@ -637,10 +715,12 @@ export async function deleteComment(req: Request, res: Response) {
  * Increment the like/dislike count of a given video.
  * @param {Request} req Request object.
  * @param {Response} res Response object.
+ * @param {NextFunction} next Next function.
  */
 export async function incrementLikeDislikeCount(
   req: Request,
   res: Response,
+  next: NextFunction,
 ): Promise<void> {
   const { videoId, type } = req.params;
   if (!videoId) {
@@ -692,9 +772,6 @@ export async function incrementLikeDislikeCount(
 
     res.status(200).json({ message: "Reaction updated" });
   } catch (error) {
-    console.error("Error updating reaction:", error);
-    res.status(500).json({
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
+    next(error);
   }
 }
