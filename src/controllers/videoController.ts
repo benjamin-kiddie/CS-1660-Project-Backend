@@ -240,16 +240,24 @@ export async function getVideoOptions(req: Request, res: Response) {
 
 /**
  * Retrieves user's video options from Firestore and generates signed URLs for thumbnails.
- * Uses users ID to return user's uploaded video options.
+ * Uses user ID to return user's uploaded video options.
  * @param {Request} req Request object.
  * @param {Response} res Response object.
  */
 export async function getUserVideoOptions(req: Request, res: Response) {
-  const userId = (req.query.userId as string)?.toLowerCase() || "";
+  const { userId } = req.params;
+  if (!userId) {
+    res.status(400).json({ error: "Missing user ID" });
+    return;
+  }
   const page = parseInt(req.query.page as string) || 1;
   const limit = parseInt(req.query.limit as string) || 10;
 
   try {
+    // we already know who the uploader is, so get their details
+    const { userDisplayName: uploaderDisplayName, userPfp: uploaderPfp } =
+      await getUserDetails(userId);
+
     const videoCollection = db().collection("video");
     let query: FirebaseFirestore.Query = videoCollection
       .where("uploader", "==", userId)
@@ -272,10 +280,6 @@ export async function getUserVideoOptions(req: Request, res: Response) {
             expires: Date.now() + 60 * 60 * 1000, // valid for 1 hour
           });
 
-        // get uploader display name and pfp
-        const { userDisplayName: uploaderDisplayName, userPfp: uploaderPfp } =
-          await getUserDetails(videoData.uploader);
-
         return {
           id: videoId,
           title: videoData.title,
@@ -288,20 +292,13 @@ export async function getUserVideoOptions(req: Request, res: Response) {
       }),
     );
 
-    // sort videos by time
-    const sortedVideos = videoOptions.sort(
-      (a, b) =>
-        new Date(b.uploadTimestamp).getTime() -
-        new Date(a.uploadTimestamp).getTime(),
-    );
-
     // paginate results
     const startIndex = (page - 1) * limit;
-    const paginatedVideos = sortedVideos.slice(startIndex, startIndex + limit);
+    const paginatedVideos = videoOptions.slice(startIndex, startIndex + limit);
 
     res.status(200).json({
       videoOptions: paginatedVideos,
-      hasMore: startIndex + limit < sortedVideos.length,
+      hasMore: startIndex + limit < videoOptions.length,
     });
   } catch (error) {
     console.error("Error fetching video options:", error);

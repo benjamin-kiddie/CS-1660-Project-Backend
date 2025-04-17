@@ -7,12 +7,14 @@ import {
   getComments,
   getVideoDetails,
   getVideoOptions,
+  searchVideoOptions,
+  getUserVideoOptions,
   incrementViewCount,
   postComment,
   uploadVideo,
   incrementLikeDislikeCount,
-  searchVideoOptions,
 } from "../controllers/videoController";
+import { get } from "http";
 
 const videoRouter = Router();
 
@@ -29,6 +31,7 @@ videoRouter
     uploadVideo,
   )
   .get("/", authenticateUser, getVideoOptions)
+  .get("/:userId", authenticateUser, getUserVideoOptions)
   .get("/search", authenticateUser, searchVideoOptions)
   .get("/:videoId", authenticateUser, getVideoDetails)
   .post("/:videoId/view", authenticateUser, incrementViewCount)
