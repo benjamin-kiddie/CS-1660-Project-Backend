@@ -3,24 +3,27 @@ import multer from "multer";
 import * as os from "os";
 import { authenticateUser } from "../middleware/authMiddleware";
 import {
-  deleteComment,
-  getComments,
-  getVideoDetails,
   getVideoOptions,
-  searchVideoOptions,
   getUserVideoOptions,
-  incrementViewCount,
-  postComment,
+  searchVideoOptions,
   uploadVideo,
+  getVideoDetails,
+  deleteVideo,
+  getComments,
+  postComment,
+  deleteComment,
+  incrementViewCount,
   incrementLikeDislikeCount,
 } from "../controllers/videoController";
-import { get } from "http";
 
 const videoRouter = Router();
 
 const upload = multer({ dest: os.tmpdir() });
 
 videoRouter
+  .get("/", authenticateUser, getVideoOptions)
+  .get("/user/:userId", authenticateUser, getUserVideoOptions)
+  .get("/search", authenticateUser, searchVideoOptions)
   .post(
     "/",
     authenticateUser,
@@ -30,14 +33,12 @@ videoRouter
     ]),
     uploadVideo,
   )
-  .get("/", authenticateUser, getVideoOptions)
-  .get("/:userId", authenticateUser, getUserVideoOptions)
-  .get("/search", authenticateUser, searchVideoOptions)
   .get("/:videoId", authenticateUser, getVideoDetails)
-  .post("/:videoId/view", authenticateUser, incrementViewCount)
+  .delete("/:videoId", authenticateUser, deleteVideo)
   .get("/:videoId/comments", authenticateUser, getComments)
   .post("/:videoId/comments", authenticateUser, postComment)
   .delete("/:videoId/comments/:commentId", authenticateUser, deleteComment)
+  .post("/:videoId/view", authenticateUser, incrementViewCount)
   .post("/:videoId/:type", authenticateUser, incrementLikeDislikeCount);
 
 export default videoRouter;
