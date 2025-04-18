@@ -1,4 +1,4 @@
-FROM node:22 AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -8,9 +8,11 @@ RUN npm install
 COPY . .
 RUN npm run build
 
-FROM node:22-slim AS runtime
+FROM node:22-alpine AS runtime
 
 WORKDIR /app
+
+RUN apk add --no-cache ffmpeg
 
 COPY package*.json .
 RUN npm ci --only=production
