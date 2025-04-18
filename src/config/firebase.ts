@@ -5,7 +5,7 @@ import { ServiceAccount } from "firebase-admin";
 const secretClient = new SecretManagerServiceClient();
 
 async function getSecret(secretName: string): Promise<string> {
-  const projectId = process.env.GOOGLE_CLOUD_PROJECT;
+  const projectId = "scufftube-video-platform";
   const name = `projects/${projectId}/secrets/${secretName}/versions/latest`;
 
   const [version] = await secretClient.accessSecretVersion({ name });

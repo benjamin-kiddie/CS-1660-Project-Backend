@@ -60,19 +60,13 @@ Follow these steps to set up the project for local development:
     npm install
     ```
 
-4. **Compile the Project**:
-  Compile the TypeScript files into JavaScript:
+4. **Run the Server**:
+  Start the server using the provided npm script:
     ```bash
-    npx tsc
+    npm run dev
     ```
 
-5. **Run the Server**:
-  Start the server using Node.js:
-    ```bash
-    node /dist/server.js
-    ```
-
-6. **Access the Backend**:
-  The backend will be running on `http://localhost:3000`
+5. **Access the Backend**:
+  The backend will be running on `http://localhost:8080`
 
 ---

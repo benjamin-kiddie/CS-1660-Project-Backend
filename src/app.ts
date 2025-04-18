@@ -9,7 +9,10 @@ import { errorLogger } from "./middleware/errorLogger";
 const app = express();
 
 const corsOptions = {
-  origin: "http://localhost:5173",
+  origin: [
+    "http://localhost:5173",
+    "https://scufftube-866186459758.us-central1.run.app",
+  ],
 };
 
 app.use(helmet());
