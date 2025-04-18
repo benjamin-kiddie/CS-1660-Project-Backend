@@ -3,11 +3,12 @@ name: 'Build and Deploy to Cloud Run'
 on:
   push:
     branches:
-      - '"main"'
+      - main
 
 env:
   PROJECT_ID: 'scufftube-video-platform'
   REGION: 'us-central1'
+  REGISTRY: 'backend'
   SERVICE: 'backend-service'
   WORKLOAD_IDENTITY_PROVIDER: 'projects/866186459758/locations/global/workloadIdentityPools/github/providers/github-actions-provider'
 
@@ -28,6 +29,7 @@ jobs:
         uses: 'google-github-actions/auth@f112390a2df9932162083945e46d439060d66ec2' # google-github-actions/auth@v2
         with:
           workload_identity_provider: '${{ env.WORKLOAD_IDENTITY_PROVIDER }}'
+          project_id: '${{ env.PROJECT_ID }}'
     
       - name: 'Docker Auth'
         uses: 'docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567' # docker/login-action@v3
@@ -38,16 +40,18 @@ jobs:
 
       - name: 'Build and Push Container'
         run: |-
-          DOCKER_TAG="$${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{ github.sha }}"
+          DOCKER_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REGISTRY }}/${{ env.SERVICE }}:${{ github.sha }}"
           docker build --tag "${DOCKER_TAG}" .
           docker push "${DOCKER_TAG}"
 
-      - name: 'Deploy to Cloud Run'
+      - id: deploy
+        name: 'Deploy to Cloud Run'
         uses: 'google-github-actions/deploy-cloudrun@33553064113a37d688aa6937bacbdc481580be17' # google-github-actions/deploy-cloudrun@v2
         with:
           service: '${{ env.SERVICE }}'
           region: '${{ env.REGION }}'
-          image: '${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE }}:${{ github.sha }}'
+          image: '${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REGISTRY }}/${{ env.SERVICE }}:${{ github.sha }}'
       
       - name: 'Show output'
-        run: echo "Deployed to: ${{ steps.deploy.outputs.url }}"
+        run: |2-
+          echo ${{ steps.deploy.outputs.url }}
