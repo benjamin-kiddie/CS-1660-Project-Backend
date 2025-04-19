@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import path from "path";
+import os from "os";
 import seedrandom from "seedrandom";
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -60,7 +61,7 @@ async function getUserDetails(
 }
 
 /**
- * Uploads a video and its thumbnail to Firebase Storage and adds metadata to Firestore.
+ * Uploads video metada to Firestore and returns signed URLs for file upload to frontend.
  * @param {Request} req Request object.
  * @param {Response} res Response object.
  * @param {NextFunction} next Next function.
@@ -70,45 +71,32 @@ export async function uploadVideo(
   res: Response,
   next: NextFunction,
 ) {
-  let videoFile: Express.Multer.File | null = null;
-  let thumbnailFile: Express.Multer.File | null = null;
-  let generatedThumbnailPath: string | null = null;
-
   try {
-    // get uplader ID from token
+    const allowedVideoTypes = ["video/mp4", "video/webm", "video/ogg"];
+    const allowedThumbnailTypes = [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/gif",
+    ];
+
     const token = req.headers.authorization?.split(" ")[1];
     const decodedToken = await admin.auth().verifyIdToken(token || "");
     const userId = decodedToken.uid;
 
-    // parse JSON data
-    const { title, description } = req.body;
-    if (!title) {
-      res.status(400).json({ error: "Missing required field" });
-      return;
+    const { title, description, videoType, thumbnailType } = req.body;
+    if (!title || !videoType) {
+      res.status(400).json({ error: "Missing required field(s)" });
     }
 
-    // check files
-    const files = req.files as { [fieldname: string]: Express.Multer.File[] };
-    if (!files.videoFile) {
-      res.status(400).json({ error: "Missing required file" });
-      return;
+    if (!allowedVideoTypes.includes(videoType)) {
+      res.status(400).json({ error: "Unsupported video type." });
     }
-    videoFile = files.videoFile[0];
-    thumbnailFile = files.thumbnailFile ? files.thumbnailFile[0] : null;
-
-    // if no thumbnail file is provider, generate one
-    if (!thumbnailFile) {
-      const thumbnailPath = `thumbnail-${Date.now()}.jpg`;
-      generatedThumbnailPath = path.join("/tmp", thumbnailPath);
-      await execAsync(
-        `ffmpeg -i ${videoFile.path} -ss 00:00:01.000 -vframes 1 ${generatedThumbnailPath}`,
-      );
-      if (!fs.existsSync(generatedThumbnailPath)) {
-        throw new Error("Failed to generate thumbnail");
-      }
+    if (thumbnailType && !allowedThumbnailTypes.includes(thumbnailType)) {
+      res.status(400).json({ error: "Unsupported thumbnail type." });
     }
 
-    // add document to video collection in Firestore, save ID
+    // create Firestore document for the video
     const videoData = {
       title,
       description,
@@ -121,46 +109,82 @@ export async function uploadVideo(
     const docRef = await db().collection("video").add(videoData);
     const videoId = docRef.id;
 
-    // put video in Firebase storage bucket
     const bucket = storage().bucket();
-    const videoDestPath = `videos/${videoId}`;
-    await bucket.upload(videoFile.path, {
-      destination: videoDestPath,
-      metadata: {
-        contentType: videoFile.mimetype,
-        metadata: {
-          originalFileName: videoFile.originalname,
-        },
-      },
+
+    // generate signed URL for video upload
+    const videoFile = bucket.file(`videos/${videoId}`);
+    const [videoUploadUrl] = await videoFile.getSignedUrl({
+      action: "write",
+      expires: Date.now() + 10 * 60 * 1000, // 10 minutes
+      contentType: videoType,
     });
 
-    // put thumbnail in Firebase storage bucket
-    const thumbnailDestPath = `thumbnails/${videoId}`;
-    await bucket.upload(
-      thumbnailFile ? thumbnailFile.path : generatedThumbnailPath || "",
-      {
-        destination: thumbnailDestPath,
-        metadata: {
-          contentType: thumbnailFile ? thumbnailFile.mimetype : "image/jpeg",
-          metadata: {
-            originalFilename: thumbnailFile
-              ? thumbnailFile.originalname
-              : "generated-thumbnail.jpg",
-          },
-        },
-      },
-    );
+    // generate signed URL for thumbnail upload
+    let thumbnailUploadUrl: string | undefined;
+    if (thumbnailType) {
+      const thumbnailFile = bucket.file(`thumbnails/${videoId}`);
+      [thumbnailUploadUrl] = await thumbnailFile.getSignedUrl({
+        action: "write",
+        expires: Date.now() + 10 * 60 * 1000,
+        contentType: thumbnailType,
+      });
+    }
 
     res.status(201).json({
       videoId,
+      videoUploadUrl,
+      thumbnailUploadUrl,
     });
   } catch (error) {
     next(error);
+  }
+}
+
+/**
+ * Generates a thumbnail for a video using ffmpeg and uploads it to Firebase Storage.
+ * @param {Request} req Request object.
+ * @param {Response} res Response object.
+ * @param {NextFunction} next Next function.
+ */
+export async function generateThumbnail(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  const { videoId } = req.body;
+
+  if (!videoId) {
+    res.status(400).json({ error: "Missing video ID" });
+  }
+
+  const bucket = storage().bucket();
+  const videoPath = `videos/${videoId}`;
+  const thumbnailPath = `thumbnails/${videoId}`;
+
+  const tempVideoPath = path.join(os.tmpdir(), videoId);
+  const tempThumbnailPath = path.join(os.tmpdir(), `${videoId}.jpg`);
+
+  try {
+    await bucket.file(videoPath).download({ destination: tempVideoPath });
+
+    await execAsync(
+      `ffmpeg -i ${tempVideoPath} -ss 00:00:01 -vframes 1 ${tempThumbnailPath}`,
+    );
+
+    await bucket.upload(tempThumbnailPath, {
+      destination: thumbnailPath,
+      metadata: { contentType: "image/jpeg" },
+    });
+
+    res.status(204).end();
+  } catch (error) {
+    next(error);
   } finally {
-    if (videoFile) fs.unlinkSync(videoFile.path);
-    if (thumbnailFile) fs.unlinkSync(thumbnailFile.path);
-    if (generatedThumbnailPath && fs.existsSync(generatedThumbnailPath)) {
-      fs.unlinkSync(generatedThumbnailPath);
+    if (fs.existsSync(tempVideoPath)) {
+      fs.unlinkSync(tempVideoPath);
+    }
+    if (fs.existsSync(tempThumbnailPath)) {
+      fs.unlinkSync(tempThumbnailPath);
     }
   }
 }
