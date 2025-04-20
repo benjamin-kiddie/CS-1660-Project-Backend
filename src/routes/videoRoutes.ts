@@ -14,25 +14,17 @@ import {
   deleteComment,
   incrementViewCount,
   incrementLikeDislikeCount,
+  generateThumbnail,
 } from "../controllers/videoController";
 
 const videoRouter = Router();
-
-const upload = multer({ dest: os.tmpdir() });
 
 videoRouter
   .get("/", authenticateUser, getVideoOptions)
   .get("/user/:userId", authenticateUser, getUserVideoOptions)
   .get("/search", authenticateUser, searchVideoOptions)
-  .post(
-    "/",
-    authenticateUser,
-    upload.fields([
-      { name: "videoFile", maxCount: 1 },
-      { name: "thumbnailFile", maxCount: 1 },
-    ]),
-    uploadVideo,
-  )
+  .post("/", authenticateUser, uploadVideo)
+  .post("/thumbnail", authenticateUser, generateThumbnail)
   .get("/:videoId", authenticateUser, getVideoDetails)
   .delete("/:videoId", authenticateUser, deleteVideo)
   .get("/:videoId/comments", authenticateUser, getComments)
