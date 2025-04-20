@@ -559,8 +559,20 @@ export async function deleteVideo(
 
     // delete video and thumbnail from Firebase Storage
     const bucket = storage().bucket();
-    await bucket.file(`videos/${videoId}`).delete();
-    await bucket.file(`thumbnails/${videoId}`).delete();
+    await Promise.allSettled([
+      bucket
+        .file(`videos/${videoId}`)
+        .delete()
+        .catch((error) => {
+          if (error.code !== 404) throw error;
+        }),
+      bucket
+        .file(`thumbnails/${videoId}`)
+        .delete()
+        .catch((error) => {
+          if (error.code !== 404) throw error;
+        }),
+    ]);
 
     res.status(204).end();
   } catch (error) {
