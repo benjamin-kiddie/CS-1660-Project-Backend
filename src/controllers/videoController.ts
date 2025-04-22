@@ -298,13 +298,16 @@ export async function getUserVideoOptions(
     const videoCollection = db().collection("video");
     let query: FirebaseFirestore.Query = videoCollection
       .where("uploader", "==", userId)
-      .orderBy("uploadTimestamp", "desc");
+      .orderBy("uploadTimestamp", "desc")
+      .limit(limit + 1)
+      .offset((page - 1) * limit);
 
     // fetch the videos
     const snapshot = await query.get();
+    const hasMore = snapshot.size > limit;
 
     const videoOptions: VideoOption[] = await Promise.all(
-      snapshot.docs.map(async (doc) => {
+      snapshot.docs.slice(0, limit).map(async (doc) => {
         const videoData = doc.data();
         const videoId = doc.id;
 
@@ -329,13 +332,9 @@ export async function getUserVideoOptions(
       }),
     );
 
-    // paginate results
-    const startIndex = (page - 1) * limit;
-    const paginatedVideos = videoOptions.slice(startIndex, startIndex + limit);
-
     res.status(200).json({
-      videoOptions: paginatedVideos,
-      hasMore: startIndex + limit < videoOptions.length,
+      videoOptions,
+      hasMore,
     });
   } catch (error) {
     next(error);
