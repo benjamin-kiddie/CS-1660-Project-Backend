@@ -3,11 +3,10 @@ import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import { ServiceAccount } from "firebase-admin";
 
 const secretClient = new SecretManagerServiceClient();
+const projectId = "scufftube-video-platform";
 
 async function getSecret(secretName: string): Promise<string> {
-  const projectId = "scufftube-video-platform";
   const name = `projects/${projectId}/secrets/${secretName}/versions/latest`;
-
   const [version] = await secretClient.accessSecretVersion({ name });
   return version.payload?.data?.toString() || "";
 }
@@ -16,20 +15,20 @@ async function initializeFirebase() {
   try {
     console.log("Initializing Firebase...");
 
-    // Fetch secrets
+    // fetch secrets
     const [clientEmail, privateKey] = await Promise.all([
       getSecret("firebase-client-email"),
       getSecret("firebase-private-key"),
     ]);
 
-    // Assemble service account object
+    // assemble service account object
     const serviceAccount: ServiceAccount = {
-      projectId: "scufftube-video-platform",
+      projectId: projectId,
       clientEmail,
       privateKey: privateKey.replace(/\\n/g, "\n"),
     };
 
-    // Only initialize Firebase once
+    // only initialize Firebase once
     if (!admin.apps.length) {
       console.log("Initializing Firebase Admin SDK...");
       admin.initializeApp({
